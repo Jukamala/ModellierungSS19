@@ -1,4 +1,5 @@
 import numpy as np
+import time
 
 #Erstelle eine Liste von Tasks - (COMMAND,args1,args2,..))
 def readSequenz(filename):
@@ -47,7 +48,7 @@ class Fahrzeug():
         if not self.finished:
             self.curTask = np.array([float(x) for x in self.seq.pop(0)[1:5]])
             self.change = True
-            self.finished = len(seq) == 0
+            self.finished = len(self.seq) == 0
         
     #Nachdem aktuelle v erreicht ist:
     def lookahead(self):
@@ -62,10 +63,9 @@ class Fahrzeug():
             nextTask = np.array([float(x) for x in nextTask])
         else:
             nextTask = np.array([0,0,0])
-        print(self.curTask[0:3],nextTask)
         self.deltaNext = nextTask - self.curTask[0:3]
     
-    #update
+    #update with deltatime in s
     def update(self, dt):
         #Anpassung fertig
         if self.change:
@@ -74,19 +74,30 @@ class Fahrzeug():
         else:
             self.nextTask()
         
-    def status(self):
-        print("----------\npos = [%.2f,%.2f,%.2f°]\nvel = [%.2f]\nMode = %s,  changing = %s,  finished = %s\nAktueller Task - %s\nDelta zum nächsten - %s"%\
+    def status(self, printing=False):
+        #Konsole
+        if printing:
+            print("----------\npos = [%.2f,%.2f,%.2f°]\nvel = [%.2f]\nMode = %s,  changing = %s,  finished = %s\nAktueller Task - %s\nDelta zum nächsten - %s"%\
               (self.x, self.y, self.phi%360, self.vel, self.mode, self.change, self.finished, self.curTask, self.deltaNext))
+        #Hud
+        else:
+            return "[%.2f,%.2f,%.2f°] @ %.2f"%(self.x, self.y, self.phi%360, self.vel)
         
         
-    
-
-seq = readSequenz('cur.seq')
-print(seq)
-robot = Fahrzeug(seq, None, 50, 10)
-robot.status()
-user = input()
-while user != 'x':
-    robot.update(0)
+if __name__ == '__main__':
+    #init
+    seq = readSequenz('cur.seq')
+    print(seq)
+    robot = Fahrzeug(seq, None, 200, 10)
     robot.status()
-    user = input()
+    last = time.time()
+    while True:
+        #vergangene Zeit
+        now = time.time()
+        dt = now - last
+        last = now
+        print("| dt = %f"%dt)
+        
+        robot.update(dt)
+        robot.status(True)
+        time.sleep(2)
