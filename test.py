@@ -87,7 +87,7 @@ def upwardspiral():
     set_motion([0,0,0,0],0)'''
     
     for i in range(0,8):
-        circle(0,12.5,-45*i,45,10)
+        circle(0,12.5,45*i,45,5)
     set_motion([0,0,0,0],0)
     
 def klee():
@@ -111,6 +111,6 @@ if __name__ == '__main__':
             inp = np.array(v).astype(np.float)
             #move(inp[1:],inp[0])
             #circle(inp[0],inp[1],inp[2],inp[3],inp[4])
-            #upwardspiral()
-            klee()
+            upwardspiral()
+            #klee()
         
