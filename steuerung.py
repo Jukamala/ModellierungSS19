@@ -14,7 +14,7 @@ def readSequenz(filename):
                 do = np.array(do[1:5]).astype(float)
                 #Aufteilen in Abschnitte mit phi <= 45°
                 k = np.abs(int(np.ceil(do[2]/45)))
-                for i in range(0,k:
+                for i in range(0,k):
                     print(do/k)
                     seq.append(['MOVE'] + list(do/k))
             else:
