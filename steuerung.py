@@ -3,22 +3,25 @@ import numpy as np
 from ev3dev2.motor import *
 #%%
 def readSequenz(filename):
-    '''Erstelle eine Liste von Tasks - (COMMAND,args1,args2,..)'''
+    '''
+    Erstelle eine Liste von Tasks - (COMMAND,args1,args2,..)
+    Zerteile Tasks mit dphi > 45° in gleiche Teile mit dphi < 45°
+    '''
     seq = []
     with open(filename) as file:
         for line in file:
-            print(line)
+            lg.debug("line - %s :"%line)
             do = line.strip('\n').split(' ')
             #Diskretisieren von langen Drehnungen
             if do[0] == 'MOVE':
                 do = np.array(do[1:5]).astype(float)
                 #Aufteilen in Abschnitte mit phi <= 45°
-                k = np.abs(int(np.ceil(do[2]/45)))
+                k = max(1,np.abs(int(np.ceil(do[2]/45))))
                 for i in range(0,k):
-                    print(do/k)
+                    lg.debug("add - %s"%(['MOVE'] + list(do/k)))
                     seq.append(['MOVE'] + list(do/k))
             else:
-                print(do)
+                lg.debug("add - %s"%do)
                 seq.append(do)
     return seq
 #%%
@@ -30,6 +33,7 @@ m4 = LargeMotor(OUTPUT_D)
 class Fahrzeug():
     '''
     vel = | [velx,vely] - Geschwindigkeit in cm/s
+          | alpha       - Drehwinkel °/s
           | [velb,      -          -"-
              r,         - Radius
              mx,my,     - Vektor zum Mittelpunkt vom Start
@@ -56,6 +60,8 @@ class Fahrzeug():
     curTask = [dx, dy, dphi, dt] - aktueller Task
     deltaNext = [ddx,ddy,ddphi]  - Unterschied zwischen dx,dy,dphi von aktuellem/nächsten Task
     
+    speedmult - Faktor mit der die Zeit vergeht um zu Verlangsamen(<1) oder Beschleunigen(>1)
+    
     '''
     
     def __init__(self, seq, maxVel, maxAcc, T, D, fahrzeuglist=None):
@@ -77,6 +83,7 @@ class Fahrzeug():
         self.subs = fahrzeuglist
         self.lookahead()
         self.nextTask(0)
+        self.speedmult = 1
         
     def nextTask(self, delay):
         '''
@@ -92,13 +99,17 @@ class Fahrzeug():
             #Skip Tasks till next is found
             skip = True
             while skip:
-                self.curTask += np.array([float(x) for x in self.seq.pop(0)[1:5]])
+                task = np.array([float(x) for x in self.seq.pop(0)[1:5]])
+                self.curTask += task
                 #TODO: Bessere Formel für Geschw
                 #Hier nur Translationsgeschw.
                 ndt = self.curTask[3] - delay
-                if ndt > 0 and np.sqrt(self.curTask[0]**2 + self.curTask[1]**2)/ndt < self.maxVel:
+                nvel = np.sqrt(self.curTask[0]**2 + self.curTask[1]**2)/ndt
+                if ndt > 0 and  nvel < self.maxVel:
                     self.curTask[3] -= delay
                     skip = False
+                else:
+                    lg.warning("%s skipped, ndt= %.4f, nvel= %.4f"%(task,ndt,nvel))
                 
             self.change = 2
             self.move(self.curTask)
@@ -127,9 +138,15 @@ class Fahrzeug():
             lg.info('TODO')
             #TODO
     
-    def update(self, dt):
-        '''Update with deltatime in s'''
-        #Todo: Change
+    def update(self, dt, realpos = None):
+        '''
+        Update with deltatime in s (factored with speedmult)
+        realpos = | [x,y,phi] - Optional tatsächliche Postion (von Sensoren, ...) zur Korrektur
+                  | None      - Keine Korrektur
+        '''
+        dt *= speedmult
+        
+        #TODO: change,ende
         
         if self.change == 2:
             #Nach dem ersten Update kann wieder aktuelles vel für updatesPos verwendet werden 
@@ -149,6 +166,14 @@ class Fahrzeug():
         dpos = self.updatePos(dt)
         self.pos += dpos[0:2]
         self.phi += dpos[2]
+        
+        #Korrektur
+        if realpos != None:
+            curpos = np.zeros(3)
+            curpos[0:2] = self.pos
+            curpos[2] = self.phi
+            self.errpos += realpos - [self.pos,self.phi]
+        
         
         #Anpassung starten
         if self.timer > self.ende:
@@ -177,6 +202,10 @@ class Fahrzeug():
         if self.tmpTask[2] == 0:
             dpos = np.zeros(3)
             dpos[:-1] = self.tmpvel*dt
+            return dpos
+        elif self.tmpTask[0] == 0 and self.tmpTask[1] == 0:
+            dpos = np.zeros(3)
+            dpos[2] = self.tmpvel*dt
             return dpos
         else:
             #Unnötig kompliziert
@@ -208,18 +237,21 @@ class Fahrzeug():
     
     def move(self, task):
         '''
-        Ausführung der Grundbewegung.
+        Ausführung der Grundbewegungen.
         |Gerade                        falls dphi=0
-        |Kreisegment mit Winkel phi    sonst
+        |Drehung     mit Winkel alpha  falls dx=dy=0
+        |Kreisegment        -"-        sonst
         
-        task = [dx, dy, dphi, dt]
+        task = [dx, dy, dalpha, dt]
         '''
         lg.debug('Do Task: %s'%task)
         self.tmpvel = self.vel
         if task[2] == 0:
             self.vel = task[0:2]/task[3]
             self.set_motion(self.trans(task[0:2], task[3]), task[3])
-            
+        elif task[0] == 0 and task[1] == 0:
+            self.vel = task[2]/task[3]
+            self.set_motion(self.rot(task[2],task[3]), task[3])
         else:
             self.circle(task[0],task[1],task[2],task[3])
             
@@ -284,3 +316,13 @@ class Fahrzeug():
         dt          - Zeit 
         '''
         return (v[0] * np.array([1,-1,1,-1]) + v[1] * np.array([1,1,1,1]))/(np.pi*self.D*dt)         #Umdrehungen/s
+    
+    def setSpeed(speed):
+        '''
+        Setzt Faktor mit dem die Zeit vergeht
+        | <1 - Verlangsamen
+        | >1 - Beschleunigen
+        '''
+        
+        self.speedmult = speed
+    
