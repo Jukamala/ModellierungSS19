@@ -32,14 +32,14 @@ m4 = LargeMotor(OUTPUT_D)
     
 class Fahrzeug():
     '''
-    vel = | [velx,vely] - Geschwindigkeit in cm/s
-          | alpha       - Drehwinkel °/s
-          | [velb,      -          -"-
+    vel = | [velx,vely] - Geschwindigkeit     in cm/s
+          | alpha       - Drehgeschwindigkeit in °/s
+          | [velb,      - Geschwindigkeit     in cm/s
              r,         - Radius
              mx,my,     - Vektor zum Mittelpunkt vom Start
              beta]      - Winkel seit Start
     tmpvel              - vel der letzten Runde (für Berechnung von errpos)
-    pos = [x,y], phi  - Postion in [cm,cm,Grad]
+    pos = [x,y,phi]     - Postion in [cm,cm,Grad]
     errpos = Feler der pos zur eigentlich vorgesehenen pos
     
     maxVel, maxAcc - maximale Beschleunigung und Geschwindigkeit in [cm/s, cm/s^2]
@@ -69,17 +69,16 @@ class Fahrzeug():
         self.maxAcc = maxAcc
         self.T = T
         self.D = D
-        self.pos = np.zeros(2)
+        self.pos = np.zeros(3)
         self.errpos = np.zeros(3)
-        self.phi = 0
         self.vel = np.zeros(2)
         self.tmpvel = np.zeros(2)
         self.finished = len(seq) == 0
         self.mode = 'NULL'
         self.seq = seq
         self.timer = 0
-        self.lastTask = [0,0,0,0]
-        self.curTask = [0,0,0,0]
+        self.lastTask = np.zeros(4)
+        self.curTask = np.zeros(4)
         self.subs = fahrzeuglist
         self.lookahead()
         self.nextTask(0)
@@ -144,7 +143,7 @@ class Fahrzeug():
         realpos = | [x,y,phi] - Optional tatsächliche Postion (von Sensoren, ...) zur Korrektur
                   | None      - Keine Korrektur
         '''
-        dt *= speedmult
+        dt *= self.speedmult
         
         #TODO: change,ende
         
@@ -164,15 +163,11 @@ class Fahrzeug():
         #Update timer und pos
         self.timer += dt
         dpos = self.updatePos(dt)
-        self.pos += dpos[0:2]
-        self.phi += dpos[2]
+        self.pos += dpos
         
         #Korrektur
         if realpos != None:
-            curpos = np.zeros(3)
-            curpos[0:2] = self.pos
-            curpos[2] = self.phi
-            self.errpos += realpos - [self.pos,self.phi]
+            self.errpos += realpos - self.pos
         
         
         #Anpassung starten
@@ -225,9 +220,9 @@ class Fahrzeug():
     def status(self, printing='info'):
         #Konsole
         if printing == 'hud':
-            return "[%.2f,%.2f,%.2f°] @ %s"%(self.pos[0], self.pos[1], self.phi%360, np.around(self.vel,decimals=2))
-        stat = "----------\npos = [%.2f,%.2f,%.2f°]\nvel = %s\nMode = %s,  changing = %s,  finished = %s,  timer= %.2f,  ende= %.2f\nerrpos = %s\nAktueller Task     - %s\nDelta zum nächsten - %s"%\
-              (self.pos[0], self.pos[1], self.phi%360, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.deltaNext)
+            return "[%.2f,%.2f,%.2f°] @ %s"%(self.pos[0], self.pos[1], (self.pos[3]+180)%360-180, np.around(self.vel,decimals=2))
+        stat = "----------\npos = [%.3f,%.3f,%.3f°]\nvel = %s\nMode = %s,  changing = %s,  finished = %s,  timer= %.2f,  ende= %.2f\nerrpos = %s\nAktueller Task     - %s\nDelta zum nächsten - %s"%\
+              (self.pos[0], self.pos[1], (self.pos[3]+180)%360-180, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.deltaNext)
         
         if printing == 'debug':
             lg.debug(stat)
@@ -277,7 +272,7 @@ class Fahrzeug():
         lg.debug("r=%.4f, b=%.4f, rho[%%]=%.4f, rho[°]=%.4f"%(r,b,rho/(2*np.pi),np.rad2deg(rho)))
         lg.debug("t=[%.4f,%.4f]"%(tx,ty))
         
-        [mx,my] = r*sgn*np.array([ty,tx])/(np.sqrt(ty**2+tx**2))   #relativ
+        [mx,my] = r*sgn*np.array([-ty,tx])/(np.sqrt(ty**2+tx**2))   #relativ
         c = np.cos(phi)
         s = np.sin(phi)
         mxn = c*mx-s*my
@@ -317,7 +312,7 @@ class Fahrzeug():
         '''
         return (v[0] * np.array([1,-1,1,-1]) + v[1] * np.array([1,1,1,1]))/(np.pi*self.D*dt)         #Umdrehungen/s
     
-    def setSpeed(speed):
+    def setSpeed(self, speed):
         '''
         Setzt Faktor mit dem die Zeit vergeht
         | <1 - Verlangsamen
