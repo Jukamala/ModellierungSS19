@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
     #init
     seq = st.readSequenz(args.filename)
-    lg.info(seq)
+    lg.info("Sequenz: %s"%seq)
     maxRPS = 2.5
     H = 18.5
     B = 17.7
@@ -33,15 +33,17 @@ if __name__ == '__main__':
     D = 6
     maxVel = maxRPS*pi*D*min(1/T,1)
     robot = st.Fahrzeug(seq, maxVel, 10, T, D)
+    robot.setSpeed(1)
     last = time.time()
     fertig = False
+    wait = 0
     while not fertig:
         #vergangene Zeit
         now = time.time()
         dt = now - last
         last = now
         fertig = robot.update(dt)
-        lg.info("| dt = %.4f, timer = %.4f"%(dt,robot.timer))
+        lg.debug("| dt = %.4f, timer = %.4f"%(dt,robot.timer))
         lg.debug(robot.status('hud'))
     robot.status()
     

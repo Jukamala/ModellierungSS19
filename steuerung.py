@@ -1,5 +1,6 @@
 import logging as lg
 import numpy as np
+import time
 from ev3dev2.motor import *
 #%%
 def readSequenz(filename):
@@ -43,7 +44,7 @@ class Fahrzeug():
     errpos = Feler der pos zur eigentlich vorgesehenen pos
     
     maxVel, maxAcc - maximale Beschleunigung und Geschwindigkeit in [cm/s, cm/s^2]
-    R - Raddurchmesser
+    D - Raddurchmesser
     T - Radumdrehungen für Vollkreisdrehung
     
     subs - Alle Fahrzeuge die noch untergeordnet sind
@@ -61,7 +62,8 @@ class Fahrzeug():
     deltaNext = [ddx,ddy,ddphi]  - Unterschied zwischen dx,dy,dphi von aktuellem/nächsten Task
     
     speedmult - Faktor mit der die Zeit vergeht um zu Verlangsamen(<1) oder Beschleunigen(>1)
-    
+    comptime  - Idle/Wartezeit des letzen Schrittes während berechnet wurde
+    testime/testdt - Zeitmessung für Debugging
     '''
     
     def __init__(self, seq, maxVel, maxAcc, T, D, fahrzeuglist=None):
@@ -69,6 +71,9 @@ class Fahrzeug():
         self.maxAcc = maxAcc
         self.T = T
         self.D = D
+        self.comptime = 0
+        self.testtime = None
+        self.testdt = None
         self.pos = np.zeros(3)
         self.errpos = np.zeros(3)
         self.vel = np.zeros(2)
@@ -84,11 +89,15 @@ class Fahrzeug():
         self.nextTask(0)
         self.speedmult = 1
         
-    def nextTask(self, delay):
+    def nextTask(self, delay, start=None):
         '''
         Beende den aktuellen Task und beginne Anpassung an neue dx,dy,dphi
         
         delay - Verspätung aus dem letzten Task
+        start - Zeitpunkt beim Aufruf von update()
+        
+        return: comp - Zeit zwischen Aufruf von update() und starten der Motoren,
+                       also Berechenzeit, in der der Roboter still steht
         '''
         if not self.finished:
             #Fehler mitberücksichtigen
@@ -112,8 +121,15 @@ class Fahrzeug():
                 
             self.change = 2
             self.move(self.curTask)
+
+            if start != None:
+                comp = (time.time() - start)
+            else:
+                comp = 0
             self.timer = 0
             self.status()
+            lg.debug("comp = %.4f"%comp)
+            return comp
         
     def lookahead(self):
         '''Nachdem die Anpassung vorbei ist (Zielgeschw. erreicht ist), berachte das nächste Ziel'''
@@ -143,7 +159,12 @@ class Fahrzeug():
         realpos = | [x,y,phi] - Optional tatsächliche Postion (von Sensoren, ...) zur Korrektur
                   | None      - Keine Korrektur
         '''
+        #Berechnungszeit vernachlässigen
+        start = time.time()
         dt *= self.speedmult
+        dt -= self.comptime
+        self.comptime = 0
+        
         
         #TODO: change,ende
         
@@ -179,10 +200,11 @@ class Fahrzeug():
             else:
                 #TODO
                 lg.info('TODO')
+                
         if self.timer > self.curTask[3]:
             #Berechne zu weit gefahrene Distanz
             self.errpos = self.updatePos(-(self.timer-self.curTask[3]))
-            self.nextTask(self.timer - self.curTask[3])
+            self.comptime = self.nextTask(self.timer - self.curTask[3],start=start)
             if self.finished:
                 return True
         return False
@@ -220,9 +242,9 @@ class Fahrzeug():
     def status(self, printing='info'):
         #Konsole
         if printing == 'hud':
-            return "[%.2f,%.2f,%.2f°] @ %s"%(self.pos[0], self.pos[1], (self.pos[3]+180)%360-180, np.around(self.vel,decimals=2))
+            return "[%.2f,%.2f,%.2f°] @ %s"%(self.pos[0], self.pos[1], (self.pos[2]+180)%360-180, np.around(self.vel,decimals=2))
         stat = "----------\npos = [%.3f,%.3f,%.3f°]\nvel = %s\nMode = %s,  changing = %s,  finished = %s,  timer= %.2f,  ende= %.2f\nerrpos = %s\nAktueller Task     - %s\nDelta zum nächsten - %s"%\
-              (self.pos[0], self.pos[1], (self.pos[3]+180)%360-180, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.deltaNext)
+              (self.pos[0], self.pos[1], (self.pos[2]+180)%360-180, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.deltaNext)
         
         if printing == 'debug':
             lg.debug(stat)
@@ -261,7 +283,7 @@ class Fahrzeug():
         
         sgn = np.sign(alpha)
         alpha = np.abs(alpha)
-        [alpha,phi] = np.deg2rad([alpha,self.phi])    #Bogenmaß
+        [alpha,phi] = np.deg2rad([alpha,self.pos[2]])    #Bogenmaß
         v = np.sqrt(dx**2+dy**2)
         r = v/(2*np.sin(alpha/2))
         b = alpha * r 
@@ -286,12 +308,16 @@ class Fahrzeug():
        
         
     def set_motion(self, v, dt):
+        if self.testtime != None:
+            lg.info("delta in Zeit: %.4f vs %.4f"%(time.time() - self.testtime, self.testdt))
         '''
         set the power of the motors
         
         v = [v1,v2,v3,v4] in RPS
         '''
         lg.info('Moving %s for %.2f s'%(v,dt))
+        self.testtime = time.time()
+        self.testdt = dt
         
         m1.on(SpeedRPS(v[0]), brake = False)  #oben links
         m2.on(SpeedRPS(v[1]), brake = False)  #oben rechts
