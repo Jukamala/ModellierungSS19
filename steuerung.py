@@ -57,13 +57,14 @@ class Fahrzeug():
                | 1 - wird von vorbereitet
                | 0 - fertig
     timer    - Zeit, bis akzueler Task vorbei ist
-    lastTask                     - vorheriger Task
     curTask = [dx, dy, dphi, dt] - aktueller Task
+    nxtTask                      - nächster Task
     deltaNext = [ddx,ddy,ddphi]  - Unterschied zwischen dx,dy,dphi von aktuellem/nächsten Task
     
     speedmult - Faktor mit der die Zeit vergeht um zu Verlangsamen(<1) oder Beschleunigen(>1)
-    comptime  - Idle/Wartezeit des letzen Schrittes während berechnet wurde
     testime/testdt - Zeitmessung für Debugging
+    comptime  - Idle/Wartezeit des letzen Schrittes während berechnet wurde (eig. vernachlässigbar geworden)
+    comp = [v1, v2, v3, v4] - Ansteuerung der Motoren im nächsten Schritt in Umd/s
     '''
     
     def __init__(self, seq, maxVel, maxAcc, T, D, fahrzeuglist=None):
@@ -71,9 +72,10 @@ class Fahrzeug():
         self.maxAcc = maxAcc
         self.T = T
         self.D = D
-        self.comptime = 0
         self.testtime = None
         self.testdt = None
+        self.comptime = 0
+        self.comp = None
         self.pos = np.zeros(3)
         self.errpos = np.zeros(3)
         self.vel = np.zeros(2)
@@ -82,7 +84,6 @@ class Fahrzeug():
         self.mode = 'NULL'
         self.seq = seq
         self.timer = 0
-        self.lastTask = np.zeros(4)
         self.curTask = np.zeros(4)
         self.subs = fahrzeuglist
         self.lookahead()
@@ -101,11 +102,11 @@ class Fahrzeug():
         '''
         if not self.finished:
             #Fehler mitberücksichtigen
-            self.lastTask = self.curTask
             self.curTask = np.zeros(4)
             self.curTask[:-1] = self.errpos
             #Skip Tasks till next is found
             skip = True
+            skipped = False
             while skip:
                 task = np.array([float(x) for x in self.seq.pop(0)[1:5]])
                 self.curTask += task
@@ -114,13 +115,22 @@ class Fahrzeug():
                 ndt = self.curTask[3] - delay
                 nvel = np.sqrt(self.curTask[0]**2 + self.curTask[1]**2)/ndt
                 if ndt > 0 and  nvel < self.maxVel:
+                    #alte Zeit speichern und anpassen
+                    odt = self.curTask[3]
                     self.curTask[3] -= delay
                     skip = False
                 else:
                     lg.warning("%s skipped, ndt= %.4f, nvel= %.4f"%(task,ndt,nvel))
+                    skipped = True
                 
             self.change = 2
-            self.move(self.curTask)
+            if not skipped and self.comp != None:
+                #Skallieren, da ndt sich geändert hat
+                mv = self.comp * odt / ndt
+            else:
+                #Neu berechnen
+                mv = self.move(self.curTask)
+            self.set_motion(mv,ndt)
 
             if start != None:
                 comp = (time.time() - start)
@@ -128,7 +138,7 @@ class Fahrzeug():
                 comp = 0
             self.timer = 0
             self.status()
-            lg.debug("comp = %.4f"%comp)
+            lg.debug("comptime = %.4f"%comp)
             return comp
         
     def lookahead(self):
@@ -140,11 +150,11 @@ class Fahrzeug():
             self.mode = curTask[1]
         #Berechne den Abstand zum nächsten MOVE
         if not self.finished:
-            nextTask = list(self.seq[0])[1:4]
-            nextTask = np.array([float(x) for x in nextTask])
+            self.nxtTask = list(self.seq[0])[1:5]
+            self.nxtTask = np.array([float(x) for x in self.nxtTask])
         else:
-            nextTask = np.array([0,0,0])
-        self.deltaNext = nextTask - self.curTask[0:3]
+            self.nxtTask = np.zeros(4)
+        self.deltaNext = self.nxtTask[0:3] - self.curTask[0:3]
         #Wann soll Anpassung anfangen?
         if self.mode == 'NULL':
             #Am Ende bremsen:
@@ -180,6 +190,11 @@ class Fahrzeug():
             self.finished = len(self.seq) == 0
             self.change = 0
             self.lookahead()
+            #Nächsten Task berechnen
+            nxt = self.nxtTask
+            nxt[:-1] = nxt[:-1] + self.errpos
+            self.comp = self.move(nxt,nphi = self.pos[2] + self.curTask[2])
+            lg.info("comp=%s"%self.comp)
         
         #Update timer und pos
         self.timer += dt
@@ -195,7 +210,9 @@ class Fahrzeug():
         if self.timer > self.ende:
             if self.mode == 'NULL' or self.finished:
                 #Bremsen
-                self.set_motion(np.zeros(4),0)
+                if self.finished:
+                    self.set_motion(np.zeros(4),0)
+                lg.debug('Bremsen ausgeschalten')
                 #self.vel = np.zeros(2) | vel wird noch für errpos gebraucht
             else:
                 #TODO
@@ -243,8 +260,8 @@ class Fahrzeug():
         #Konsole
         if printing == 'hud':
             return "[%.2f,%.2f,%.2f°] @ %s"%(self.pos[0], self.pos[1], (self.pos[2]+180)%360-180, np.around(self.vel,decimals=2))
-        stat = "----------\npos = [%.3f,%.3f,%.3f°]\nvel = %s\nMode = %s,  changing = %s,  finished = %s,  timer= %.2f,  ende= %.2f\nerrpos = %s\nAktueller Task     - %s\nDelta zum nächsten - %s"%\
-              (self.pos[0], self.pos[1], (self.pos[2]+180)%360-180, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.deltaNext)
+        stat = "----------\npos = [%.3f,%.3f,%.3f°]\nvel = %s\nMode = %s,  changing = %s,  finished = %s,  timer= %.2f,  ende= %.2f\nerrpos = %s\nAktueller Task     - %s\nNächster Task  - %s"%\
+              (self.pos[0], self.pos[1], (self.pos[2]+180)%360-180, np.around(self.vel,decimals=4), self.mode, self.change, self.finished, self.timer, self.ende, np.around(self.errpos,decimals=4), self.curTask, self.nxtTask)
         
         if printing == 'debug':
             lg.debug(stat)
@@ -252,7 +269,7 @@ class Fahrzeug():
             lg.info(stat)
             
     
-    def move(self, task):
+    def move(self, task, nphi=None):
         '''
         Ausführung der Grundbewegungen.
         |Gerade                        falls dphi=0
@@ -260,30 +277,36 @@ class Fahrzeug():
         |Kreisegment        -"-        sonst
         
         task = [dx, dy, dalpha, dt]
+        nphi - Ausrichtung zum Startzeitpunkt, kann von phi=pos[2] abweichen, da vorgerechnet wird
+        
+        return: [v1, v2, v3, v4] Umd/s der Motoren
         '''
+        if nphi == None:
+            nphi = self.pos[2]
         lg.debug('Do Task: %s'%task)
         self.tmpvel = self.vel
         if task[2] == 0:
             self.vel = task[0:2]/task[3]
-            self.set_motion(self.trans(task[0:2], task[3]), task[3])
+            return self.trans(task[0:2], task[3])
         elif task[0] == 0 and task[1] == 0:
             self.vel = task[2]/task[3]
-            self.set_motion(self.rot(task[2],task[3]), task[3])
+            return self.rot(task[2],task[3])
         else:
-            self.circle(task[0],task[1],task[2],task[3])
+            return self.circle(task[0],task[1],task[2],task[3],nphi = nphi)
             
-    def circle(self, dx,dy,alpha,dt):
+    def circle(self, dx,dy,alpha,dt, nphi):
         '''
         dx, dy - Abstand zum nächsten Punkt
         phi    - aktuelle Ausrichtung des Roboters
         alpha  - zu drehender Winkel in Grad  < 90°
         dt     - Zeit für das Drehen
+        nphi   - Ausrichtung zum Startzeitpunkt, kann von phi=pos[2] abweichen, da vorgerechnet wird
         '''
         dreh = self.rot(alpha,dt)                        #Rotation
         
         sgn = np.sign(alpha)
         alpha = np.abs(alpha)
-        [alpha,phi] = np.deg2rad([alpha,self.pos[2]])    #Bogenmaß
+        [alpha,phi] = np.deg2rad([alpha,nphi])    #Bogenmaß
         v = np.sqrt(dx**2+dy**2)
         r = v/(2*np.sin(alpha/2))
         b = alpha * r 
@@ -304,7 +327,7 @@ class Fahrzeug():
         bew = self.trans([tx,ty], dt)
         v = dreh + bew
         lg.debug("rot=%s, tran=%s"%(np.around(dreh, decimals=4),np.around(bew, decimals=4)))
-        self.set_motion(v,dt)
+        return v
        
         
     def set_motion(self, v, dt):
