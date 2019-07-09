@@ -46,22 +46,21 @@ m4 = LargeMotor(OUTPUT_D)
 class Fahrzeug():
     '''
     vel = | [velx,vely] - Geschwindigkeit     in cm/s
-          | [alpha]       - Drehgeschwindigkeit in °/s
+          | alpha       - Drehgeschwindigkeit in °/s
           | [velb,      - Geschwindigkeit     in cm/s
              r,         - Radius
              mx,my,     - Vektor zum Mittelpunkt vom Start
              beta]      - Winkel seit Start
-          für Berechnung von errpos
-    compvel             - vel der nächsten Runde
+    tmpvel              - vel der letzten Runde (für Berechnung von errpos)
     pos = [x,y,phi]     - Postion in [cm,cm,Grad]
     errpos = Feler der pos zur eigentlich vorgesehenen pos
     
     maxVel, maxAcc - maximale Beschleunigung und Geschwindigkeit in [cm/s, cm/s^2]
     D - Raddurchmesser
     T - Radumdrehungen für Vollkreisdrehung
+    
     subs - Alle Fahrzeuge die noch untergeordnet sind
     seq  - Die auszuführende Sequenz
-    
     mode - aktueller Ausführungsmodus
            SMOOTH - glatter Übergang
            NULL   - zwischen Tasks stehen bleiben
@@ -89,11 +88,10 @@ class Fahrzeug():
         self.testdt = None
         self.comptime = 0
         self.comp = None
-        self.change = 1
         self.pos = np.zeros(3)
         self.errpos = np.zeros(3)
-        self.compvel = np.zeros(2)
         self.vel = np.zeros(2)
+        self.tmpvel = np.zeros(2)
         self.finished = len(seq) == 0
         self.mode = 'NULL'
         self.seq = seq
@@ -115,7 +113,9 @@ class Fahrzeug():
                        also Berechenzeit, in der der Roboter still steht
         '''
         if not self.finished:
+            #Fehler mitberücksichtigen
             self.curTask = np.zeros(4)
+            self.curTask[:-1] = self.errpos
             #Skip Tasks till next is found
             skip = True
             skipped = False
@@ -138,16 +138,11 @@ class Fahrzeug():
             self.change = 2
             if not skipped and self.comp is not None:
                 #Skallieren, da ndt sich geändert hat
-                self.comp *= odt/ndt
-                #Erste Komponente von vel ist Geschw.
-                self.compvel[0] *= odt/ndt
-                #Außer wenn vel = [vx, vy]
-                if self.comp[2] == 0:
-                    self.compvel[1] *= odt/ndt
+                mv = self.comp * odt / ndt
             else:
                 #Neu berechnen
-                self.comp = self.move(self.curTask)
-            self.set_motion(self.comp,ndt)
+                mv = self.move(self.curTask)
+            self.set_motion(mv,ndt)
 
             if start is not None:
                 comp = (time.time() - start)
@@ -192,16 +187,12 @@ class Fahrzeug():
         dt -= self.comptime
         self.comptime = 0
         
-        #Korrektur
-        if realpos is not None:
-            self.errpos = realpos - self.pos
-        
         
         #TODO: change,ende
         
         if self.change == 2:
             #Nach dem ersten Update kann wieder aktuelles vel für updatesPos verwendet werden 
-            self.vel = self.compvel
+            self.tmpvel = self.vel
             self.tmpTask = self.curTask
             self.change = 1
             
@@ -222,12 +213,18 @@ class Fahrzeug():
         dpos = self.updatePos(dt)
         self.pos += dpos
         
+        #Korrektur
+        if realpos is not None:
+            self.errpos = realpos - self.pos
+        
+        
         #Anpassung starten
         if self.timer > self.ende:
             if self.mode == 'NULL' or self.finished:
                 #Bremsen
                 #if self.finished:
                 self.set_motion(np.zeros(4),0)
+                #self.vel = np.zeros(2) | vel wird noch für errpos gebraucht
             else:
                 #TODO
                 lg.info('TODO')
@@ -244,30 +241,31 @@ class Fahrzeug():
         '''
         Berechnet die gefahrene Strecke nach dt.
         Für negative dt ist der Vektor umgedreht.
-        Verwendet vel und tmpTask, die erst im ersten Update nach dem 
+        Verwendet tmpvel und tmpTask, die erst im ersten Update nach dem 
         Einstellen des neuen Tasks auf den aktuellen Wert gesetzt werden.
         '''
-        lg.debug("vel = %s, tmpTask = %s"%(np.around(self.vel, decimals = 4), self.tmpTask))
         if self.tmpTask[2] == 0:
             dpos = np.zeros(3)
-            dpos[:-1] = self.vel*dt
+            dpos[:-1] = self.tmpvel*dt
             return dpos
         elif self.tmpTask[0] == 0 and self.tmpTask[1] == 0:
             dpos = np.zeros(3)
-            dpos[2] = self.vel[0]*dt
+            dpos[2] = self.tmpvel*dt
             return dpos
         else:
             #Unnötig kompliziert
-            beta = np.deg2rad(self.vel[4])
-            #lg.debug("sgn= %d, %d"%(np.sign(dt),np.sign(self.tmpTask[2])))
-            beta2 = beta + np.sign(self.tmpTask[2]) * (self.vel[0]*dt/self.vel[1])
-            #lg.debug("beta=%.4f, beta2=%.4f"%(beta,beta2))
+            lg.debug("tmpvel=%s"%np.around(self.tmpvel, decimals=4))
+                
+            beta = np.deg2rad(self.tmpvel[4])
+            lg.debug("sgn= %d, %d"%(np.sign(dt),np.sign(self.tmpTask[2])))
+            beta2 = beta + np.sign(self.tmpTask[2]) * (self.tmpvel[0]*dt/self.tmpvel[1])
+            lg.debug("beta=%.4f, beta2=%.4f"%(beta,beta2))
             c1,c2 = np.cos([beta,beta2])
             s1,s2 = np.sin([beta,beta2])
             #Vektor zu Mitte(beta) + Vektor von Mitte(beta2)
-            self.vel[4] = np.rad2deg(beta2)
-            return [(c1-c2)*self.vel[2] + (s2-s1)*self.vel[3],
-                    (s1-s2)*self.vel[2] + (c1-c2)*self.vel[3], np.rad2deg(beta2-beta)]
+            self.tmpvel[4] = np.rad2deg(beta2)
+            return [(c1-c2)*self.tmpvel[2] + (s2-s1)*self.tmpvel[3],
+                    (s1-s2)*self.tmpvel[2] + (c1-c2)*self.tmpvel[3], np.rad2deg(beta2-beta)]
         
     def status(self, printing='info'):
         #Konsole
@@ -296,12 +294,13 @@ class Fahrzeug():
         '''
         if nphi is None:
             nphi = self.pos[2]
-        lg.debug('Compute Task: %s'%task)
+        lg.debug('Do Task: %s'%task)
+        self.tmpvel = self.vel
         if task[2] == 0:
-            self.compvel = task[0:2]/task[3]
+            self.vel = task[0:2]/task[3]
             return self.trans(task[0:2], task[3])
         elif task[0] == 0 and task[1] == 0:
-            self.compvel = [task[2]/task[3]]
+            self.vel = task[2]/task[3]
             return self.rot(task[2],task[3])
         else:
             return self.circle(task[0],task[1],task[2],task[3],nphi = nphi)
@@ -334,7 +333,7 @@ class Fahrzeug():
         s = np.sin(phi)
         mxn = c*mx-s*my
         myn = s*mx+c*my                                             #absolut
-        self.compvel = np.array([b/dt,r,mxn,myn,0])
+        self.vel = np.array([b/dt,r,mxn,myn,0])
         
         bew = self.trans([tx,ty], dt)
         v = dreh + bew

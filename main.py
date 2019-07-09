@@ -29,7 +29,7 @@ if __name__ == '__main__':
     maxRPS = 2.5
     H = 18.5
     B = 17.7
-    T = 6
+    T = 0.925*6
     D = 6
     maxVel = maxRPS*pi*D*min(1/T,1)
     robot = st.Fahrzeug(seq, maxVel, 10, T, D)
