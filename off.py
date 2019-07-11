@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sat Jun 29 16:59:58 2019
-
-@author: Justus
-"""
-
 from ev3dev2.motor import *
 
 m1 = LargeMotor(OUTPUT_A)

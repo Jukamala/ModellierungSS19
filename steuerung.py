@@ -18,8 +18,8 @@ def readSequenz(filename):
             #Diskretisieren von langen Drehnungen für direkte Strecken
             if do[0] == 'MOVE':
                 do = np.array(do[1:5]).astype(float)
-                #Aufteilen in Abschnitte mit phi <= 22.5°
-                k = max(1,np.abs(int(np.ceil(do[2]/22.5))))
+                #Aufteilen in Abschnitte mit phi <= 12°
+                k = max(1,np.abs(int(np.ceil(do[2]/12))))
                 for i in range(0,k):
                     lg.debug("add - %s"%(['MOVE'] + list(do/k)))
                     seq.append(['MOVE'] + list(do/k))
@@ -33,7 +33,7 @@ def readSequenz(filename):
                 seq.append(do)
                 lg.debug("add - %s"%do)
             #Keine Diskretisierung für Kreisbögen
-            else:
+            elif do[0] == 'MODE':
                 lg.debug("add - %s"%do)
                 seq.append(do)
     return seq
@@ -65,6 +65,7 @@ class Fahrzeug():
     mode - aktueller Ausführungsmodus
            SMOOTH - glatter Übergang
            NULL   - zwischen Tasks stehen bleiben
+           NOBRAKE - NULL ohne Bremsen an den Ecken (Fehler in Kauf nehmen)
     finished - Sequenz fertig?
     change   - | 2 - neuer Task gestartet
                | 1 - wird von vorbereitet
@@ -116,6 +117,7 @@ class Fahrzeug():
         '''
         if not self.finished:
             self.curTask = np.zeros(4)
+            self.curTask[:-1] = self.errpos
             #Skip Tasks till next is found
             skip = True
             skipped = False
@@ -147,6 +149,10 @@ class Fahrzeug():
             else:
                 #Neu berechnen
                 self.comp = self.move(self.curTask)
+            
+            self.status()
+            
+            #Bewegung starten und Berechnungszeit timen
             self.set_motion(self.comp,ndt)
 
             if start is not None:
@@ -154,7 +160,6 @@ class Fahrzeug():
             else:
                 comp = 0
             self.timer = 0
-            self.status()
             lg.debug("comptime = %.4f"%comp)
             return comp
         
@@ -173,7 +178,7 @@ class Fahrzeug():
             self.nxtTask = np.zeros(4)
         self.deltaNext = self.nxtTask[0:3] - self.curTask[0:3]
         #Wann soll Anpassung anfangen?
-        if self.mode == 'NULL':
+        if self.mode == 'NULL' or self.mode == 'NOBRAKE':
             #Am Ende bremsen:
             self.ende = self.curTask[3]-self.timer
         else:
@@ -212,6 +217,7 @@ class Fahrzeug():
             self.change = 0
             self.lookahead()
             #Nächsten Task berechnen
+            lg.debug("nxtTask = %s, errpos = %s"%(self.nxtTask, self.errpos))
             nxt = self.nxtTask
             nxt[:-1] = nxt[:-1] + self.errpos
             self.comp = self.move(nxt,nphi = self.pos[2] + self.curTask[2])
@@ -225,17 +231,17 @@ class Fahrzeug():
         #Anpassung starten
         if self.timer > self.ende:
             if self.mode == 'NULL' or self.finished:
-                #Bremsen
-                #if self.finished:
-                self.set_motion(np.zeros(4),0)
+                    self.set_motion(np.zeros(4),0)
             else:
-                #TODO
-                lg.info('TODO')
+                if self.mode != 'NOBRAKE':
+                    #TODO
+                    lg.info('TODO')
                 
         if self.timer > self.curTask[3]:
-            #Berechne zu weit gefahrene Distanz
-            self.errpos = self.updatePos(-(self.timer-self.curTask[3]))
+            t = self.timer
             self.comptime = self.nextTask(self.timer - self.curTask[3],start=start)
+            #Berechne zu weit gefahrene Distanz (fließt erst in übernächste Berechung ein)
+            self.errpos = self.updatePos(-(t-self.tmpTask[3]))
             if self.finished:
                 return True
         return False
@@ -339,6 +345,7 @@ class Fahrzeug():
         bew = self.trans([tx,ty], dt)
         v = dreh + bew
         lg.debug("rot=%s, tran=%s"%(np.around(dreh, decimals=4),np.around(bew, decimals=4)))
+        lg.debug("compvel = %s"%self.compvel)
         return v
        
         

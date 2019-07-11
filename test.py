@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Jun 28 18:23:28 2019
-
-@author: Justus
-"""
-
 from ev3dev2.motor import *
 import time
 import numpy as np
