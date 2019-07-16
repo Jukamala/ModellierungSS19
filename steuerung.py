@@ -19,7 +19,7 @@ def readSequenz(filename):
             if do[0] == 'MOVE':
                 do = np.array(do[1:5]).astype(float)
                 #Aufteilen in Abschnitte mit phi <= 12°
-                k = max(1,np.abs(int(np.ceil(do[2]/12))))
+                k = max(1,np.abs(int(np.floor(do[2]/12))))
                 for i in range(0,k):
                     lg.debug("add - %s"%(['MOVE'] + list(do/k)))
                     seq.append(['MOVE'] + list(do/k))
